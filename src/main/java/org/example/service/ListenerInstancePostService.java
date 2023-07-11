@@ -25,10 +25,11 @@ import java.util.Map;
  */
 @Slf4j
 public class ListenerInstancePostService extends Thread{
-    private final ListenerPlugin listenerPlugin;
-    private final ListenerPluginInstance listenerPluginInstance;
+    private volatile boolean isStopped = false;
+    private ListenerPlugin listenerPlugin;
+    private ListenerPluginInstance listenerPluginInstance;
     private final ListenerEventMapper listenerEventMapper;
-    private final Map<String,String> listenerInstanceParams;
+    private Map<String,String> listenerInstanceParams;
 
     public ListenerInstancePostService(ListenerPluginInstance listenerPluginInstance, ListenerEventMapper listenerEventMapper, ListenerPlugin listenerPlugin){
         log.info("listener plugin instance {} service start!", listenerPluginInstance.getInstanceName());
@@ -46,15 +47,14 @@ public class ListenerInstancePostService extends Thread{
 
     @Override
     public void run() {
-        while (listenerPluginInstance.getPluginInstanceStatus() == ListenerPluginInstanceStatus.NORMAL) {
+        while (!isStopped) {
             try {
                 LambdaQueryWrapper<ListenerEvent> wrapper = new LambdaQueryWrapper<>();
                 wrapper.eq(ListenerEvent::getPluginInstanceId, listenerPluginInstance.getId())
-                        .orderByDesc(ListenerEvent::getCreateTime)
                         .last("limit 100");
                 List<ListenerEvent> eventList = listenerEventMapper.selectList(wrapper);
                 if (CollectionUtils.isEmpty(eventList)) {
-                    log.info("There is not waiting alerts");
+                    log.info("There is not waiting listener events");
                     continue;
                 }
                 this.post(eventList);
@@ -62,7 +62,7 @@ public class ListenerInstancePostService extends Thread{
                 log.error("Alert sender thread meet an exception", e);
             } finally {
                 try {
-                    Thread.sleep(20000);
+                    Thread.sleep(10000);
                 } catch (final InterruptedException interruptedException) {
                     Thread.currentThread().interrupt();
                     log.error("Current thread sleep error", interruptedException);
@@ -71,7 +71,12 @@ public class ListenerInstancePostService extends Thread{
         }
     }
 
-    public void post(List<ListenerEvent> eventList){
+    public void setStopped(boolean isStopped){
+        log.info("set stopped {}", isStopped);
+        this.isStopped = isStopped;
+    }
+
+    private void post(List<ListenerEvent> eventList){
         for (ListenerEvent event: eventList){
             String eventType = event.getEventType();
             try {
@@ -122,4 +127,14 @@ public class ListenerInstancePostService extends Thread{
     private boolean listenerListenSpecificEvent(String eventType){
         return listenerPluginInstance.getListenerEventType().contains(eventType);
     }
+
+    public void updateListenerPlugin(ListenerPlugin listenerPlugin){
+        this.listenerPlugin = listenerPlugin;
+    }
+
+    public void updateListenerPluginInstance(ListenerPluginInstance listenerPluginInstance){
+        this.listenerPluginInstance = listenerPluginInstance;
+        this.listenerInstanceParams = JSONUtils.toMap(listenerPluginInstance.getPluginInstanceParams());
+    }
+
 }

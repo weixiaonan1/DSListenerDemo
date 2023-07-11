@@ -17,7 +17,7 @@ public class ListenerPluginController {
     @Autowired
     ListenerPluginService listenerPluginService;
 
-    @PostMapping("/plugin/upload")
+    @PostMapping("/plugin")
     public Result registerPlugin(@RequestParam("pluginJar") MultipartFile file, @RequestParam("classPath") String classPath) {
         return listenerPluginService.registerListenerPlugin(file, classPath);
     }
@@ -29,10 +29,25 @@ public class ListenerPluginController {
         return listenerPluginService.createListenerInstance(pluginDefineId, instanceName, pluginInstanceParams, "MasterDownEvent,MasterTimeoutEvent,TaskStartEvent");
     }
 
-    @PostMapping("/plugin/remove")
-    public Result removePlugin(@RequestParam("id") int pluginId) {
+    @DeleteMapping("/plugin/{id}")
+    public Result removePlugin(@PathVariable("id") int pluginId) {
         return listenerPluginService.removeListenerPlugin(pluginId);
     }
 
+    @DeleteMapping("/instance/{id}")
+    public Result removePluginInstance(@PathVariable("id") int instanceId) {
+        return listenerPluginService.removeListenerInstance(instanceId);
+    }
 
+    @PutMapping("/plugin/{id}")
+    public Result updatePlugin(@PathVariable("id") int pluginId, @RequestParam("pluginJar") MultipartFile file, @RequestParam("classPath") String classPath) {
+        return listenerPluginService.updateListenerPlugin(pluginId, file, classPath);
+    }
+
+    @PutMapping("/instance/{id}")
+    public Result updateInstance(@PathVariable("id") int instance,
+                                 @RequestParam(value = "instanceName") String instanceName,
+                                 @RequestParam(value = "pluginInstanceParams") String pluginInstanceParams) {
+        return listenerPluginService.updateListenerInstance(instance, instanceName, pluginInstanceParams, "MasterDownEvent,MasterTimeoutEvent,TaskStartEvent");
+    }
 }

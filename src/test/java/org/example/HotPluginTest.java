@@ -37,6 +37,7 @@ public class HotPluginTest implements ApplicationContextAware {
         ListenerPlugin listenerPlugin = (ListenerPlugin) applicationContext.getBean(clazz.getName());
         System.out.println(listenerPlugin.name());
         defaultListableBeanFactory.removeBeanDefinition(classPath);
+        classLoaderUtil.removeJarFile(jarPath);
         Thread.sleep(300000);
     }
 

@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.dolphinscheduler.spi.params.PluginParamsTransfer;
 import org.apache.dolphinscheduler.spi.utils.JSONUtils;
+import org.example.entity.ListenerEvent;
 import org.example.entity.ListenerPluginInstance;
 import org.example.entity.PluginDefine;
 import org.example.entity.Result;
@@ -31,10 +32,7 @@ import javax.annotation.Resource;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -75,30 +73,30 @@ public class ListenerPluginService implements ApplicationContextAware, Applicati
 
     @Override
     public void onApplicationEvent(@NotNull ContextRefreshedEvent event) {
-//        List<PluginDefine> pluginDefines = pluginDefineMapper.selectList(new QueryWrapper<>());
-//        log.info("init listener plugins");
-//        for (PluginDefine pluginDefine : pluginDefines) {
-//            try {
-//                ListenerPlugin plugin = getListenerPluginFromJar(pluginDefine.getPluginLocation(), pluginDefine.getPluginClassName());
-//                listenerPlugins.put(pluginDefine.getId(), plugin);
-//                log.info("init listener plugin {}", pluginDefine.getPluginName());
-//            } catch (Exception e) {
-//                log.error("failed when init listener plugin {}", pluginDefine.getPluginName(), e);
-//            }
-//        }
-//        log.info("init listener instances");
-//        List<ListenerPluginInstance> pluginInstances = pluginInstanceMapper.selectList(new QueryWrapper<>());
-//        for (ListenerPluginInstance pluginInstance : pluginInstances) {
-//            int pluginId = pluginInstance.getPluginDefineId();
-//            if (!listenerPlugins.containsKey(pluginId)) {
-//                log.error("failed to init listener instance {} because listener plugin {} cannot be loaded", pluginInstance.getInstanceName(), pluginId);
-//                continue;
-//            }
-//            ListenerInstancePostService listenerInstancePostService = new ListenerInstancePostService(pluginInstance, listenerEventMapper, listenerPlugins.get(pluginId));
-//            listenerInstancePostService.start();
-//            listenerInstancePostServices.put(pluginInstance.getId(), listenerInstancePostService);
-//            log.info("init listener instance {}：", pluginInstance.getInstanceName());
-//        }
+        List<PluginDefine> pluginDefines = pluginDefineMapper.selectList(new QueryWrapper<>());
+        log.info("init listener plugins");
+        for (PluginDefine pluginDefine : pluginDefines) {
+            try {
+                ListenerPlugin plugin = getListenerPluginFromJar(pluginDefine.getPluginLocation(), pluginDefine.getPluginClassName());
+                listenerPlugins.put(pluginDefine.getId(), plugin);
+                log.info("init listener plugin {}", pluginDefine.getPluginName());
+            } catch (Exception e) {
+                log.error("failed when init listener plugin {}", pluginDefine.getPluginName(), e);
+            }
+        }
+        log.info("init listener instances");
+        List<ListenerPluginInstance> pluginInstances = pluginInstanceMapper.selectList(new QueryWrapper<>());
+        for (ListenerPluginInstance pluginInstance : pluginInstances) {
+            int pluginId = pluginInstance.getPluginDefineId();
+            if (!listenerPlugins.containsKey(pluginId)) {
+                log.error("failed to init listener instance {} because listener plugin {} cannot be loaded", pluginInstance.getInstanceName(), pluginId);
+                continue;
+            }
+            ListenerInstancePostService listenerInstancePostService = new ListenerInstancePostService(pluginInstance, listenerEventMapper, listenerPlugins.get(pluginId));
+            listenerInstancePostService.start();
+            listenerInstancePostServices.put(pluginInstance.getId(), listenerInstancePostService);
+            log.info("init listener instance {}：", pluginInstance.getInstanceName());
+        }
     }
 
     public Result registerListenerPlugin(MultipartFile file, String classPath) {
@@ -131,10 +129,68 @@ public class ListenerPluginService implements ApplicationContextAware, Applicati
         return Result.success();
     }
 
+    public Result updateListenerPlugin(int id, MultipartFile file, String classPath) {
+        if (!listenerPlugins.containsKey(id)) {
+            return Result.fail(String.format("listener plugin %d not exist in concurrent hash map", id));
+        }
+        // 先把所有的实例都暂停
+        LambdaQueryWrapper<ListenerPluginInstance> wrapper = new LambdaQueryWrapper<>();
+        wrapper.select(ListenerPluginInstance::getId)
+                .eq(ListenerPluginInstance::getPluginDefineId, id);
+        List<ListenerPluginInstance> instances = pluginInstanceMapper.selectList(wrapper);
+        List<ListenerInstancePostService> services = new ArrayList<>();
+        for (ListenerPluginInstance instance : instances) {
+            if (listenerInstancePostServices.containsKey(instance.getId())) {
+                services.add(listenerInstancePostServices.get(instance.getId()));
+            }
+        }
+        services.forEach(x -> x.setStopped(true));
+        PluginDefine plugin = pluginDefineMapper.selectById(id);
+
+        try {
+            //TODO: 卸载旧的plugin（在卸载结束但是没有加载新插件时服务宕机，会造成插件及实例不可用，消息堆积（可以强制要求新jar包和旧jar包名称不相同来规避，这样可以在更新完成后才删除旧jar包，如果出现之前的问题，可以在服务重启时自行恢复）
+            classLoaderUtil.removeJarFile(plugin.getPluginLocation());
+            defaultListableBeanFactory.removeBeanDefinition(plugin.getPluginClassName());
+            Files.delete(new File(plugin.getPluginLocation()).toPath());
+            //安装新的plugin
+            String fileName = file.getOriginalFilename();
+            String filePath = path + fileName;
+            File dest = new File(filePath);
+            Files.copy(file.getInputStream(), dest.toPath());
+            ListenerPlugin newPlugin = getListenerPluginFromJar(filePath, classPath);
+            PluginDefine pluginDefine = PluginDefine.builder()
+                    .id(id)
+                    .pluginName(newPlugin.name())
+                    .pluginParams(JSONUtils.toJsonString(newPlugin.params()))
+                    .pluginType("listener")
+                    .pluginLocation(filePath)
+                    .pluginClassName(classPath)
+                    .updateTime(new Date())
+                    .build();
+            pluginDefineMapper.updateById(pluginDefine);
+            listenerPlugins.put(id, newPlugin);
+            //TODO: 恢复实例运行，如果插件的参数被更新了，那么实例的参数值也应该跟着变化，否则前端没办法根据新的插件参数修改实例了
+            services.forEach(x -> {
+                x.updateListenerPlugin(newPlugin);
+                x.setStopped(false);
+            });
+            return Result.success();
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+            return Result.fail("failed when remove jar：" + e.getMessage());
+        } catch (Exception e) {
+            return Result.fail("failed when register listener plugin：" + e.getMessage());
+        }
+
+    }
+
     public Result removeListenerPlugin(int id) {
+        if (!listenerPlugins.containsKey(id)) {
+            return Result.fail(String.format("listener plugin %d not exist in concurrent hash map", id));
+        }
         PluginDefine plugin = pluginDefineMapper.selectById(id);
         if (Objects.isNull(plugin)) {
-            return Result.fail(String.format("listener plugin %d not exist", id));
+            return Result.fail(String.format("listener plugin %d not exist in db", id));
         }
         LambdaQueryWrapper<ListenerPluginInstance> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(ListenerPluginInstance::getPluginDefineId, id);
@@ -143,7 +199,8 @@ public class ListenerPluginService implements ApplicationContextAware, Applicati
             return Result.fail(String.format("please remove listener instances of plugin %s first", plugin.getPluginName()));
         }
         try {
-            removeBean(plugin.getPluginName());
+            classLoaderUtil.removeJarFile(plugin.getPluginLocation());
+            defaultListableBeanFactory.removeBeanDefinition(plugin.getPluginClassName());
             Files.delete(new File(plugin.getPluginLocation()).toPath());
             pluginDefineMapper.deleteById(id);
         } catch (IOException e) {
@@ -157,7 +214,7 @@ public class ListenerPluginService implements ApplicationContextAware, Applicati
 
     @Transactional
     public Result createListenerInstance(int pluginDefineId, String instanceName, String pluginInstanceParams, String listenerEventType) {
-        if (!listenerPlugins.containsKey(pluginDefineId)){
+        if (!listenerPlugins.containsKey(pluginDefineId)) {
             return Result.fail(String.format("failed when register listener instance %s because listener plugin %d cannot loaded", instanceName, pluginDefineId));
         }
         ListenerPluginInstance listenerPluginInstance = new ListenerPluginInstance();
@@ -173,29 +230,55 @@ public class ListenerPluginService implements ApplicationContextAware, Applicati
         return Result.success(listenerPluginInstance);
     }
 
+    public Result updateListenerInstance(int instanceId, String instanceName, String pluginInstanceParams, String listenerEventType) {
+        if (!listenerInstancePostServices.containsKey(instanceId)) {
+            return Result.fail(String.format("failed when update listener instance %s because listener instance %d not exist in map", instanceName, instanceId));
+        }
+        ListenerInstancePostService instancePostService = listenerInstancePostServices.get(instanceId);
+        instancePostService.setStopped(true);
+        ListenerPluginInstance listenerPluginInstance = new ListenerPluginInstance();
+        listenerPluginInstance.setId(instanceId);
+        listenerPluginInstance.setInstanceName(instanceName);
+        listenerPluginInstance.setPluginInstanceParams(pluginInstanceParams);
+        listenerPluginInstance.setListenerEventType(listenerEventType);
+        listenerPluginInstance.setUpdateTime(new Date());
+        pluginInstanceMapper.updateById(listenerPluginInstance);
+        instancePostService.updateListenerPluginInstance(listenerPluginInstance);
+        instancePostService.setStopped(false);
+        return Result.success();
+    }
+
+    public Result removeListenerInstance(int id) {
+        if (!listenerInstancePostServices.containsKey(id)) {
+            return Result.fail(String.format("listener instance service %d not exist in concurrent hash map", id));
+        }
+        ListenerPluginInstance instance = pluginInstanceMapper.selectById(id);
+        if (Objects.isNull(instance)) {
+            return Result.fail(String.format("listener instance %d not exist in db", id));
+        }
+        //停止服务线程
+        ListenerInstancePostService listenerInstancePostService = listenerInstancePostServices.get(id);
+        listenerInstancePostService.setStopped(true);
+        listenerInstancePostServices.remove(id);
+        //删除该监听实例
+        pluginInstanceMapper.deleteById(id);
+        //删除该监听实力所有的消息（可能有失败的，可能有删除监听示例时未来得及处理的）
+        LambdaQueryWrapper<ListenerEvent> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ListenerEvent::getPluginInstanceId, id);
+        listenerEventMapper.delete(wrapper);
+        return Result.success();
+    }
+
     private String parsePluginParamsMap(String pluginParams) {
         Map<String, String> paramsMap = PluginParamsTransfer.getPluginParamsMap(pluginParams);
         return JSONUtils.toJsonString(paramsMap);
     }
 
-    private ListenerPlugin getListenerPluginFromJar(String filePath, String classPath) throws ClassNotFoundException {
+    private ListenerPlugin getListenerPluginFromJar(String filePath, String classPath) throws Exception {
         ClassLoader classLoader = classLoaderUtil.getClassLoader(filePath);
-        assert classLoader != null;
         Class<?> clazz = classLoader.loadClass(classPath);
         BeanDefinitionBuilder beanDefinitionBuilder = BeanDefinitionBuilder.genericBeanDefinition(clazz);
         defaultListableBeanFactory.registerBeanDefinition(clazz.getName(), beanDefinitionBuilder.getRawBeanDefinition());
         return (ListenerPlugin) applicationContext.getBean(clazz.getName());
-    }
-
-    public Object getBean(String name) {
-        return applicationContext.getBean(name);
-    }
-
-    public boolean containsBean(String name) {
-        return applicationContext.containsBean(name);
-    }
-
-    public void removeBean(String name) {
-        defaultListableBeanFactory.removeBeanDefinition(name);
     }
 }
