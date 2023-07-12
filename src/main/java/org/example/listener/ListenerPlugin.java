@@ -19,29 +19,23 @@ public interface ListenerPlugin {
     /**
      * api: master/worker 失连/超时
      */
-    default void onMasterDown(DsListenerServerAlertEvent masterDownEvent) {
-    }
+    default void onMasterDown(DsListenerServerAlertEvent masterDownEvent) {}
 
-    default void onMasterTimeout(DsListenerServerAlertEvent masterTimeoutEvent) {
-    }
+    default void onMasterTimeout(DsListenerServerAlertEvent masterTimeoutEvent) {}
 
     /**
      * master：工作流开始/结束/失败等
      */
-    default void onWorkflowStart(DsListenerWorkflowAlertEvent workflowStartEvent) {
-    }
+    default void onWorkflowStart(DsListenerWorkflowAlertEvent workflowStartEvent) {}
 
-    default void onWorkflowEnd(DsListenerWorkflowAlertEvent workflowEndEvent) {
-    }
+    default void onWorkflowEnd(DsListenerWorkflowAlertEvent workflowEndEvent) {}
 
     /**
      * worker：任务开始/结束/失败等
      */
-    default void onTaskStart(DsListenerTaskAlertEvent taskStartEvent) {
-    }
+    default void onTaskStart(DsListenerTaskAlertEvent taskStartEvent) {}
 
-    default void onTaskEnd(DsListenerTaskAlertEvent taskEndEvent) {
-    }
+    default void onTaskEnd(DsListenerTaskAlertEvent taskEndEvent) {}
 
     /**
      * api server：工作流创建/更新/删除

@@ -6,11 +6,9 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.apache.dolphinscheduler.spi.utils.JSONUtils;
 import org.example.entity.ListenerEvent;
 import org.example.entity.ListenerPluginInstance;
-import org.example.entity.listenerevent.DsListenerEvent;
 import org.example.entity.listenerevent.DsListenerServerAlertEvent;
 import org.example.entity.listenerevent.DsListenerTaskAlertEvent;
 import org.example.entity.listenerevent.DsListenerWorkflowAlertEvent;
-import org.example.enums.ListenerPluginInstanceStatus;
 import org.example.enums.PostStatus;
 import org.example.listener.ListenerPlugin;
 import org.example.mapper.ListenerEventMapper;
@@ -77,6 +75,8 @@ public class ListenerInstancePostService extends Thread{
     }
 
     private void post(List<ListenerEvent> eventList){
+        // TODO: 这里的ListenerEvent，是否需要每个类型的event创建一个类，像Spark一样。各个event内部装什么？
+        // TODO: 这里可以复用告警消息中的ServerAlertContent，ProcessAlertContent，TaskAlertContent，但是创建删除修改等需要自己创建
         for (ListenerEvent event: eventList){
             String eventType = event.getEventType();
             try {
